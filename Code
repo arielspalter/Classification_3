@@ -1,0 +1,428 @@
+library(ISLR)
+library(party)
+library(rpart)
+library(rpart.plot)
+library(tidyverse)
+library(gmodels)
+library(caret)
+library(pROC)
+library(ROSE)
+library(caretEnsemble)
+library(gbm)
+install.packages("glmnet")
+
+data("Caravan")
+
+CrossTable(Caravan$Purchase)
+summary(Caravan)
+# Checking missing values
+sum(is.na(Caravan))
+
+# Normalize function
+normalize <- function(x){
+  return((x-min(x)) / (max(x)-min(x)))
+}
+
+set.seed(35)
+ind <- createDataPartition(Caravan$Purchase, p=0.70, list = FALSE)
+Train <- Caravan[ind,]
+Test <- Caravan[-ind,]
+X.Train <- Train[,c(1:86)]
+Y.Train <- Train[,86]
+X.Test <- Test[,c(1:86)]
+Y.Test <- Test[,86]
+X.Train.Norm <- normalize(X.Train[,c(1:85)])
+X.Test.Norm <- normalize(X.Test[,c(1:85)])
+Y.Test.Fix <- ifelse(Y.Test=="Yes",'X.1','X.0')
+Y.Train.Fix <- ifelse(Y.Train=="Yes",'X.1','X.0')
+X.Train.Norm <- cbind(X.Train.Norm,Y.Train.Fix) # FINAL SET
+X.Test.Norm <- cbind(X.Test.Norm,Y.Test.Fix) # FINAL SET
+X.Train <- cbind(X.Train[,c(1:86)],Y.Train.Fix) # FINAL SET
+X.Test <- cbind(X.Test,Y.Test.Fix) # FINAL SET
+
+
+f <- as.formula(Y.Train.Fix ~ .)
+Ctrl <- trainControl(method = 'cv',,number = 5,repeats = 5,classProbs = T,summaryFunction = twoClassSummary,savePredictions = T)
+metric = 'ROC'
+
+## Regular algorithms - 
+
+#kNN - auc 0.66
+set.seed(22)
+Fit.Knn <- train(f,data=X.Train.Norm,method = 'knn', trControl = Ctrl, metric = metric)
+Pred.Knn <- predict(Fit.Knn, newdata=X.Test.Norm, type='prob')
+Roc.Knn <- roc(Pred.Knn$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+#SVM - auc 0.64
+set.seed(23)
+Fit.SVM <- train(f,data=X.Train.Norm,method = 'svmRadial', trControl = Ctrl, metric = metric,tuneLength=5)
+Pred.Svm <- predict(Fit.SVM, newdata=X.Test.Norm,type='prob')
+Roc.Svm <- roc(Pred.Svm$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# Random Forest - auc 0.69
+set.seed(24)
+Fit.Rf <- train(f,data=X.Train.Norm,method = 'rf', trControl = Ctrl, metric = metric,tuneLength=5)
+Pred.Rf <- predict(Fit.Rf, newdata=X.Test.Norm,type='prob')
+Roc.Rf <- roc(Pred.Rf$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# GLM - auc 0.74
+set.seed(25) 
+Fit.Glm <- train(f,data=X.Train.Norm,method = 'glm', trControl = Ctrl, metric = metric)
+Pred.Glm <- predict(Fit.Glm, newdata=X.Test.Norm, type='prob')
+Roc.Glm <- roc(Pred.Glm$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# CART - auc 0.74
+set.seed(26) 
+Fit.Cart <- train(f,data=X.Train.Norm,method = 'ctree', trControl = Ctrl, metric = metric)
+Pred.Cart <- predict(Fit.Cart, newdata=X.Test.Norm, type='prob')
+Roc.Cart <- roc(Pred.Cart$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# GBM - auc 0.78
+set.seed(27) 
+Fit.Gbm <- train(f,data=X.Train.Norm,method = 'gbm', trControl = Ctrl, metric = metric)
+Pred.Gbm <- predict(Fit.Gbm, newdata=X.Test.Norm, type='prob')
+Roc.Gbm <- roc(Pred.Gbm$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# Lda - auc 0.75
+set.seed(27) 
+Fit.Lda <- train(f,data=X.Train.Norm,method = 'lda', trControl = Ctrl, metric = metric)
+Pred.Lda <- predict(Fit.Lda, newdata=X.Test.Norm, type='prob')
+Roc.Lda <- roc(Pred.Lda$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+
+## Synthesis Sampling -
+
+
+# UP SAMPLING (USING CARET CONTROL)
+
+Ctrl_Up <- trainControl(method = 'cv', number = 5, classProbs = T, summaryFunction = twoClassSummary, savePredictions = T, sampling = 'up')
+f <- as.formula(Y.Train.Fix ~ .)
+metric = 'ROC'
+
+# SVM Up Sampling - auc 0.74 (10% higher than the regular SVM)
+Up_Svm3 <- train(f,data = X.Train.Norm,method='svmRadial',trControl=Ctrl_Up, metric=metric)
+Up_Svm_Predict3 <- predict(Up_Svm3, newdata=X.Test.Norm, type='prob')
+Up_Svm3_Roc1 <- roc(Up_Svm_Predict3$X.0, response = X.Test.Norm$Y.Test.Fix )
+
+# CART Up Sampling - auc 0.66 (8% LOWER than the regular CART)
+Up_Cart <- train(f,data=X.Train.Norm,method = 'ctree', trControl = Ctrl_Up, metric = metric)
+Up_Cart_Predict <- predict(Up_Cart, newdata=X.Test.Norm, type='prob')
+Up_Cart_Roc <- roc(Up_Cart_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# RF Up Sampling - auc 0.72 (3% higher than the regular RF)
+Up_Rf <- train(f,data = X.Train.Norm,method='rf',trControl=Ctrl_Up, metric=metric)
+Up_Rf_Predict <- predict(Up_Rf, newdata=X.Test.Norm, type='prob')
+Up_Rf_Roc <- roc(Up_Rf_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# GLM Up Sampling - auc 0.72 (2% LOWER than the regular GLM)
+Up_Glm <- train(f,data = X.Train.Norm,method='glm',trControl=Ctrl_Up, metric=metric)
+Up_Glm_Predict <- predict(Up_Glm, newdata=X.Test.Norm, type='prob')
+Up_Glm_Roc <- roc(Up_Glm_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# KNN Up Sampling - auc 0.62 (4% LOWER than the regular Knn - THE LOWEST RESULTS)
+Up_Knn <- train(f,data = X.Train.Norm,method='knn',trControl=Ctrl_Up, metric=metric)
+Up_Knn_Predict <- predict(Up_Knn, newdata=X.Test.Norm, type='prob')
+Up_Knn_Roc <- roc(Up_Knn_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# GBM Up Sampling - auc 0.79
+Up_Gbm <- train(f,data = X.Train.Norm,method='gbm',trControl=Ctrl_Up, metric=metric)
+Up_Gbm_Predict <- predict(Up_Gbm, newdata=X.Test.Norm, type='prob')
+Up_Gbm_Roc <- roc(Up_Gbm_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# DOWN SAMPLING (USING CARET CONTROL)
+
+Ctrl_Down <- trainControl(method = 'cv', number = 5, classProbs = T, summaryFunction = twoClassSummary, savePredictions = T, sampling = 'down')
+f <- as.formula(Y.Train.Fix ~ .)
+metric = 'ROC'
+
+# SVM Down Sampling - auc 0.59 (Very Low!)
+Down_Svm3 <- train(f,data = X.Train.Norm,method='svmRadial',trControl=Ctrl_Down, metric=metric)
+Down_Svm_Predict3 <- predict(Down_Svm3, newdata=X.Test.Norm, type='prob')
+Down_Svm3_Roc1 <- roc(Down_Svm_Predict3$X.0, response = X.Test.Norm$Y.Test.Fix )
+
+# CART Down Sampling - auc 0.72
+Down_Cart <- train(f,data=X.Train.Norm,method = 'ctree', trControl = Ctrl_Down, metric = metric)
+Down_Cart_Predict <- predict(Down_Cart, newdata=X.Test.Norm, type='prob')
+Down_Cart_Roc <- roc(Down_Cart_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# RF Down Sampling - auc 0.74
+Down_Rf <- train(f,data = X.Train.Norm,method='rf',trControl=Ctrl_Down, metric=metric)
+Down_Rf_Predict <- predict(Down_Rf, newdata=X.Test.Norm, type='prob')
+Down_Rf_Roc <- roc(Down_Rf_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# GLM Down Sampling - auc 0.69
+Down_Glm <- train(f,data = X.Train.Norm,method='glm',trControl=Ctrl_Down, metric=metric)
+Down_Glm_Predict <- predict(Down_Glm, newdata=X.Test.Norm, type='prob')
+Down_Glm_Roc <- roc(Down_Glm_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# KNN Down Sampling - auc 0.64
+Down_Knn <- train(f,data = X.Train.Norm,method='knn',trControl=Ctrl_Down, metric=metric)
+Down_Knn_Predict <- predict(Down_Knn, newdata=X.Test.Norm, type='prob')
+Down_Knn_Roc <- roc(Down_Knn_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# GBM Down Sampling - auc 0.77
+Down_Gbm <- train(f,data = X.Train.Norm,method='gbm',trControl=Ctrl_Down, metric=metric)
+Down_Gbm_Predict <- predict(Down_Gbm, newdata=X.Test.Norm, type='prob')
+Down_Gbm_Roc <- roc(Down_Gbm_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+
+# ROSE SAMPLING (USING CARET CONTROL)
+
+Ctrl_Rose <- trainControl(method = 'cv', number = 5, classProbs = T, summaryFunction = twoClassSummary, savePredictions = T, sampling = 'rose')
+f <- as.formula(Y.Train.Fix ~ .)
+metric = 'ROC'
+
+# SVM Rose Sampling - auc 0.74
+Rose_Svm3 <- train(f,data = X.Train.Norm,method='svmRadial',trControl=Ctrl_Rose, metric=metric)
+Rose_Svm_Predict3 <- predict(Rose_Svm3, newdata=X.Test.Norm, type='prob')
+Rose_Svm3_Roc1 <- roc(Rose_Svm_Predict3$X.0, response = X.Test.Norm$Y.Test.Fix )
+
+# CART Rose Sampling - auc 0.66
+Rose_Cart <- train(f,data=X.Train.Norm,method = 'ctree', trControl = Ctrl_Rose, metric = metric)
+Rose_Cart_Predict <- predict(Rose_Cart, newdata=X.Test.Norm, type='prob')
+Rose_Cart_Roc <- roc(Rose_Cart_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# RF Rose Sampling - auc 0.73
+Rose_Rf <- train(f,data = X.Train.Norm,method='rf',trControl=Ctrl_Rose, metric=metric)
+Rose_Rf_Predict <- predict(Rose_Rf, newdata=X.Test.Norm, type='prob')
+Rose_Rf_Roc <- roc(Rose_Rf_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# GLM Rose Sampling - auc 0.74
+Rose_Glm <- train(f,data = X.Train.Norm,method='glm',trControl=Ctrl_Rose, metric=metric)
+Rose_Glm_Predict <- predict(Rose_Glm, newdata=X.Test.Norm, type='prob')
+Rose_Glm_Roc <- roc(Rose_Glm_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# KNN Rose Sampling - auc 0.63
+Rose_Knn <- train(f,data = X.Train.Norm,method='knn',trControl=Ctrl_Rose, metric=metric)
+Rose_Knn_Predict <- predict(Rose_Knn, newdata=X.Test.Norm, type='prob')
+Rose_Knn_Roc <- roc(Rose_Knn_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# GBM Rose Sampling - auc 0.54 (Very Low!!)
+Rose_Gbm <- train(f,data = X.Train.Norm,method='gbm',trControl=Ctrl_Rose, metric=metric)
+Rose_Gbm_Predict <- predict(Rose_Gbm, newdata=X.Test.Norm, type='prob')
+Rose_Gbm_Roc <- roc(Rose_Gbm_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# SMOTE SAMPLING (USING CARET CONTROL)
+
+Ctrl_Smote <- trainControl(method = 'cv', number = 5, classProbs = T, summaryFunction = twoClassSummary, savePredictions = T, sampling = 'smote')
+f <- as.formula(Y.Train.Fix ~ .)
+metric = 'ROC'
+
+# SVM Smote Sampling - auc 0.72
+Smote_Svm3 <- train(f,data = X.Train.Norm,method='svmRadial',trControl=Ctrl_Smote, metric=metric)
+Smote_Svm_Predict3 <- predict(Smote_Svm3, newdata=X.Test.Norm, type='prob')
+Smote_Svm3_Roc1 <- roc(Smote_Svm_Predict3$X.0, response = X.Test.Norm$Y.Test.Fix )
+
+# CART Smote Sampling - auc 0.62
+Smote_Cart <- train(f,data=X.Train.Norm,method = 'ctree', trControl = Ctrl_Smote, metric = metric)
+Smote_Cart_Predict <- predict(Smote_Cart, newdata=X.Test.Norm, type='prob')
+Smote_Cart_Roc <- roc(Smote_Cart_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# RF Smote Sampling - auc 0.71
+Smote_Rf <- train(f,data = X.Train.Norm,method='rf',trControl=Ctrl_Smote, metric=metric)
+Smote_Rf_Predict <- predict(Smote_Rf, newdata=X.Test.Norm, type='prob')
+Smote_Rf_Roc <- roc(Smote_Rf_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# GLM Smote Sampling - auc 0.69
+Smote_Glm <- train(f,data = X.Train.Norm,method='glm',trControl=Ctrl_Smote, metric=metric)
+Smote_Glm_Predict <- predict(Smote_Glm, newdata=X.Test.Norm, type='prob')
+Smote_Glm_Roc <- roc(Smote_Glm_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# KNN Smote Sampling - auc 0.65
+Smote_Knn <- train(f,data = X.Train.Norm,method='knn',trControl=Ctrl_Smote, metric=metric)
+Smote_Knn_Predict <- predict(Smote_Knn, newdata=X.Test.Norm, type='prob')
+Smote_Knn_Roc <- roc(Smote_Knn_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+# GBM Smote Sampling - auc 0.72
+Smote_Gbm <- train(f,data = X.Train.Norm,method='gbm',trControl=Ctrl_Smote, metric=metric)
+Smote_Gbm_Predict <- predict(Smote_Gbm, newdata=X.Test.Norm, type='prob')
+Smote_Gbm_Roc <- roc(Smote_Gbm_Predict$X.0, response = X.Test.Norm$Y.Test.Fix)
+
+
+## Summary of all resampling/synthesis sampling methods for each algorithm:
+
+# Summary KNN
+
+Summary_Knn <- resamples(list(Regular = Fit.Knn, Up_Sampling = Up_Knn, Down_Sampling = Down_Knn, ROSE = Rose_Knn, SMOTE = Smote_Knn))
+Summary_Knn_Roc <- data.frame(REGULAR = Summary_Knn$values$`Regular~ROC`, Up = Summary_Knn$values$`Up_Sampling~ROC`, 
+                              Down = Summary_Knn$values$`Down_Sampling~ROC`, 
+                              ROSE = Summary_Knn$values$`ROSE~ROC`, SMOTE = Summary_Knn$values$`SMOTE~ROC`)
+colnames(Summary_Knn_Roc) <- c(paste('REGULAR auc',round(mean(Summary_Knn$values$`Regular~ROC`),2), sep = '-'),
+                               paste('Up auc', round(mean(Summary_Knn$values$`Up_Sampling~ROC`),2), sep = '-'),
+                               paste('Down auc', round(mean(Summary_Knn$values$`Down_Sampling~ROC`),2), sep = '-'),
+                               paste('ROSE', round(mean(Summary_Knn$values$`ROSE~ROC`),2), sep = '-'),
+                               paste('Smote auc', round(mean(Summary_Knn$values$`SMOTE~ROC`),2), sep = '-'))
+Summary_Knn_Roc2 <- stack(Summary_Knn_Roc)
+colnames(Summary_Knn_Roc2) <- c('Auc_Values', 'Method')
+Summary_Knn_Plot <- ggplot(Summary_Knn_Roc2,aes(x=Method, y=Auc_Values, fill=Method))+geom_boxplot()+theme(axis.text.x = element_blank())+ggtitle('kNN Summary')
+
+
+
+# Summary SVM
+
+Summary_Svm <- resamples(list(Regular = Fit.SVM, Up_Sampling = Up_Svm3, Down_Sampling = Down_Svm3, ROSE = Rose_Svm3, SMOTE = Smote_Svm3))
+Summary_Svm_Roc <- data.frame(REGULAR = Summary_Svm$values$`Regular~ROC`, Up = Summary_Svm$values$`Up_Sampling~ROC`, 
+                              Down = Summary_Svm$values$`Down_Sampling~ROC`, 
+                              ROSE = Summary_Svm$values$`ROSE~ROC`, SMOTE = Summary_Svm$values$`SMOTE~ROC`)
+colnames(Summary_Svm_Roc) <- c(paste('REGULAR auc',round(mean(Summary_Svm$values$`Regular~ROC`),2), sep = '-'),
+                               paste('Up auc', round(mean(Summary_Svm$values$`Up_Sampling~ROC`),2), sep = '-'),
+                               paste('Down auc', round(mean(Summary_Svm$values$`Down_Sampling~ROC`),2), sep = '-'),
+                               paste('ROSE', round(mean(Summary_Svm$values$`ROSE~ROC`),2), sep = '-'),
+                               paste('Smote auc', round(mean(Summary_Svm$values$`SMOTE~ROC`),2), sep = '-'))
+Summary_Svm_Roc2 <- stack(Summary_Svm_Roc)
+colnames(Summary_Svm_Roc2) <- c('Auc_Values', 'Method')
+Summary_Svm_Plot <- ggplot(Summary_Svm_Roc2,aes(x=Method, y=Auc_Values, fill=Method))+
+  geom_boxplot()+theme(axis.text.x = element_blank())+ggtitle('SVM Summary')
+
+
+
+
+# Summary RF
+
+Summary_Rf <- resamples(list(Regular = Fit.Rf, Up_Sampling = Up_Rf, Down_Sampling = Down_Rf, ROSE = Rose_Rf, SMOTE = Smote_Rf))
+Summary_Rf_Roc <- data.frame(REGULAR = Summary_Rf$values$`Regular~ROC`, Up = Summary_Rf$values$`Up_Sampling~ROC`, 
+                              Down = Summary_Rf$values$`Down_Sampling~ROC`, 
+                              ROSE = Summary_Rf$values$`ROSE~ROC`, SMOTE = Summary_Rf$values$`SMOTE~ROC`)
+colnames(Summary_Rf_Roc) <- c(paste('REGULAR auc',round(mean(Summary_Rf$values$`Regular~ROC`),2), sep = '-'),
+                               paste('Up auc', round(mean(Summary_Rf$values$`Up_Sampling~ROC`),2), sep = '-'),
+                               paste('Down auc', round(mean(Summary_Rf$values$`Down_Sampling~ROC`),2), sep = '-'),
+                               paste('ROSE', round(mean(Summary_Rf$values$`ROSE~ROC`),2), sep = '-'),
+                               paste('Smote auc', round(mean(Summary_Rf$values$`SMOTE~ROC`),2), sep = '-'))
+Summary_Rf_Roc2 <- stack(Summary_Rf_Roc)
+colnames(Summary_Rf_Roc2) <- c('Auc_Values', 'Method')
+Summary_Rf_Plot <- ggplot(Summary_Rf_Roc2,aes(x=Method, y=Auc_Values, fill=Method))+
+  geom_boxplot()+theme(axis.text.x = element_blank())+ggtitle('RF Summary')
+
+
+# Summary GLM
+
+Summary_Glm <- resamples(list(Regular = Fit.Glm, Up_Sampling = Up_Glm, Down_Sampling = Down_Glm, ROSE = Rose_Glm, SMOTE = Smote_Glm))
+Summary_Glm_Roc <- data.frame(REGULAR = Summary_Glm$values$`Regular~ROC`, Up = Summary_Glm$values$`Up_Sampling~ROC`, 
+                             Down = Summary_Glm$values$`Down_Sampling~ROC`, 
+                             ROSE = Summary_Glm$values$`ROSE~ROC`, SMOTE = Summary_Glm$values$`SMOTE~ROC`)
+colnames(Summary_Glm_Roc) <- c(paste('REGULAR auc',round(mean(Summary_Glm$values$`Regular~ROC`),2), sep = '-'),
+                              paste('Up auc', round(mean(Summary_Glm$values$`Up_Sampling~ROC`),2), sep = '-'),
+                              paste('Down auc', round(mean(Summary_Glm$values$`Down_Sampling~ROC`),2), sep = '-'),
+                              paste('ROSE', round(mean(Summary_Glm$values$`ROSE~ROC`),2), sep = '-'),
+                              paste('Smote auc', round(mean(Summary_Glm$values$`SMOTE~ROC`),2), sep = '-'))
+Summary_Glm_Roc2 <- stack(Summary_Glm_Roc)
+colnames(Summary_Glm_Roc2) <- c('Auc_Values', 'Method')
+Summary_Glm_Plot <- ggplot(Summary_Glm_Roc2,aes(x=Method, y=Auc_Values, fill=Method))+
+  geom_boxplot()+theme(axis.text.x = element_blank())+ggtitle('GLM Summary')
+
+
+# Summary CART
+
+Summary_Cart <- resamples(list(Regular = Fit.Cart, Up_Sampling = Up_Cart, Down_Sampling = Down_Cart, ROSE = Rose_Cart, SMOTE = Smote_Cart))
+Summary_Cart_Roc <- data.frame(REGULAR = Summary_Cart$values$`Regular~ROC`, Up = Summary_Cart$values$`Up_Sampling~ROC`, 
+                              Down = Summary_Cart$values$`Down_Sampling~ROC`, 
+                              ROSE = Summary_Cart$values$`ROSE~ROC`, SMOTE = Summary_Cart$values$`SMOTE~ROC`)
+colnames(Summary_Cart_Roc) <- c(paste('REGULAR auc',round(mean(Summary_Cart$values$`Regular~ROC`),2), sep = '-'),
+                               paste('Up auc', round(mean(Summary_Cart$values$`Up_Sampling~ROC`),2), sep = '-'),
+                               paste('Down auc', round(mean(Summary_Cart$values$`Down_Sampling~ROC`),2), sep = '-'),
+                               paste('ROSE', round(mean(Summary_Cart$values$`ROSE~ROC`),2), sep = '-'),
+                               paste('Smote auc', round(mean(Summary_Cart$values$`SMOTE~ROC`),2), sep = '-'))
+Summary_Cart_Roc2 <- stack(Summary_Cart_Roc)
+colnames(Summary_Cart_Roc2) <- c('Auc_Values', 'Method')
+Summary_Cart_Plot <- ggplot(Summary_Cart_Roc2,aes(x=Method, y=Auc_Values, fill=Method))+
+  geom_boxplot()+theme(axis.text.x = element_blank())+ggtitle('CART Summary')
+
+
+# Summary GBM
+
+Summary_Gbm <- resamples(list(Regular = Fit.Gbm, Up_Sampling = Up_Gbm, Down_Sampling = Down_Gbm, ROSE = Rose_Gbm, SMOTE = Smote_Gbm))
+Summary_Gbm_Roc <- data.frame(REGULAR = Summary_Gbm$values$`Regular~ROC`, Up = Summary_Gbm$values$`Up_Sampling~ROC`, 
+                              Down = Summary_Gbm$values$`Down_Sampling~ROC`, 
+                              ROSE = Summary_Gbm$values$`ROSE~ROC`, SMOTE = Summary_Gbm$values$`SMOTE~ROC`)
+colnames(Summary_Gbm_Roc) <- c(paste('REGULAR auc',round(Roc.Gbm$auc,2), sep = '-'),
+                               paste('Up auc', round(Up_Gbm_Roc$auc,2), sep = '-'),
+                               paste('Down auc', round(Down_Gbm_Roc$auc,2), sep = '-'),
+                               paste('ROSE', round(Rose_Gbm_Roc$auc,2), sep = '-'),
+                               paste('Smote auc', round(Smote_Gbm_Roc$auc,2), sep = '-'))
+Summary_Gbm_Roc2 <- stack(Summary_Gbm_Roc)
+colnames(Summary_Gbm_Roc2) <- c('Auc_Values', 'Method')
+Summary_Gbm_Plot <- ggplot(Summary_Gbm_Roc2,aes(x=Method, y=Auc_Values, fill=Method))+geom_boxplot()+theme(axis.text.x = element_blank())+ggtitle('GBM Summary')
+
+
+### Ensemble Methods
+library(caretEnsemble)
+
+# Constracting the list of algorithms to be mixed and matched
+List_Ctrl <- trainControl(method = 'cv',number = 5,savePredictions = T,classProbs = T, summaryFunction = twoClassSummary)
+Algorithms <- list('knn','svmRadial', 'ctree', 'rf', 'glm')
+set.seed(34)
+Models <- caretList(f, data=X.Train.Norm, trControl = List_Ctrl, methodList = Algorithms)
+List_Results <- resamples(Models)
+
+# Checking correlations between the models:
+modelCor(List_Results) # CART and SVM are highly correlated
+
+# printing the mean ROC values of the original models to check which of them gave better auc
+z <- resamples(list(CART = Fit.Cart, SVM = Fit.SVM))
+print(list(CART = mean(z$values$`CART~ROC`), SVM = mean(z$values$`SVM~ROC`))) 
+
+# Out of the box - CART is better, SVM is left out.
+Algorithms2 <- list('knn', 'ctree', 'rf', 'glm')
+Models2 <- caretList(f, data=X.Train.Norm, trControl = List_Ctrl, methodList = Algorithms2)
+
+Ensemble_Ctrl <- trainControl(method = 'cv', number = 5, savePredictions = T, classProbs = T, summaryFunction = twoClassSummary)
+metric <- 'ROC'
+set.seed(35)
+Ensemble_Glm <- caretEnsemble(Models2, trControl=Ensemble_Ctrl, metric=metric)
+
+
+# Extracting the best predictions from all 4 models with new ensemble models (using 5 different methods)
+library(gbm)
+
+Stack_Ctrl <- trainControl(method = 'cv', number = 5, savePredictions = T, classProbs = T, summaryFunction = twoClassSummary)
+metric <- 'ROC'
+
+# Ensemble Model constructed with GLM - auc = 0.75
+set.seed(35)
+Stack_Glm <- caretStack(Models2, method='glm', trControl=Stack_Ctrl, metric=metric)
+Predict_Stack_Glm <- predict(Stack_Glm, newdata=X.Test.Norm, type='prob')
+Roc_Stack_Glm <- roc(Predict_Stack_Glm, response = X.Test.Norm$Y.Test.Fix)
+
+# Ensemble Model constructed with RF - auc = 0.67
+set.seed(35)
+Stack_Rf <- caretStack(Models2, method='rf', trControl=Stack_Ctrl, metric=metric)
+Predict_Stack_Rf <- predict(Stack_Rf, newdata=X.Test.Norm, type='prob')
+Roc_Stack_Rf <- roc(Predict_Stack_Rf, response = X.Test.Norm$Y.Test.Fix)
+
+# Ensemble Model constructed with GBM - auc = 0.75
+set.seed(35)
+Stack_Gbm <- caretStack(Models2, method='gbm', trControl=Stack_Ctrl, metric=metric)
+Predict_Stack_Gbm <- predict(Stack_Gbm, newdata=X.Test.Norm, type='prob')
+Roc_Stack_Gbm <- roc(Predict_Stack_Gbm, response = X.Test.Norm$Y.Test.Fix)
+
+# Ensemble Model constructed with CART - auc = 0.70
+set.seed(35)
+Stack_Cart <- caretStack(Models2, method='ctree', trControl=Stack_Ctrl, metric=metric)
+Predict_Stack_Cart <- predict(Stack_Cart, newdata=X.Test.Norm, type='prob')
+Roc_Stack_Cart <- roc(Predict_Stack_Cart, response = X.Test.Norm$Y.Test.Fix)
+
+# Ensemble Model constructed with LDA - auc = 0.75
+set.seed(35)
+Stack_lda <- caretStack(Models2, method='lda', trControl=Stack_Ctrl, metric=metric)
+Predict_Stack_Lda <- predict(Stack_lda, newdata=X.Test.Norm, type='prob')
+Roc_Stack_Lda <- roc(Predict_Stack_Lda, response = X.Test.Norm$Y.Test.Fix)
+
+# Summary of Ensemble models performances:
+Summary_Ensemble_roc <- data.frame(glm=Stack_Glm$ens_model$resample$ROC, 
+                                   rf = Stack_Rf$ens_model$resample$ROC, 
+                                   gbm = Stack_Gbm$ens_model$resample$ROC,
+                                   cart = Stack_Cart$ens_model$resample$ROC,
+                                   lda = Stack_lda$ens_model$resample$ROC)
+colnames(Summary_Ensemble_roc) <- c(paste('GLM','Auc -',round(Roc_Stack_Glm$auc,2)),
+                                    paste('Rf','Auc -',round(Roc_Stack_Rf$auc, 2)),
+                                    paste('Gbm','Auc -', round(Roc_Stack_Gbm$auc, 2)),
+                                    paste('Cart', 'Auc -', round(Roc_Stack_Cart$auc, 2)),
+                                    paste('LDA', 'Auc -', round(Roc_Stack_Lda$auc, 2)))
+
+Summary_Ensemble_roc <- stack(Summary_Ensemble_roc)
+Summary_Ensemble_Plot <- ggplot(Summary_Ensemble_roc, aes(x=ind, y=values, fill=ind))+geom_boxplot()
+
+
+
+
+
